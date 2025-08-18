@@ -55,7 +55,10 @@ Prompt.text = Prompt:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 Prompt.text:SetPoint("LEFT", Prompt.itemBtn, "RIGHT", 12, 0)
 Prompt.text:SetWidth(240)
 Prompt.text:SetJustifyH("LEFT")
-Prompt.text:SetText("")
+Prompt.text:Hide()
+
+Prompt.tooltip = CreateFrame("GameTooltip", "DEHelperPromptTooltip", Prompt, "GameTooltipTemplate")
+Prompt.tooltip:SetPoint("LEFT", Prompt.itemBtn, "RIGHT", 12, 0)
 
 -- Secure action button for Disenchant (player must physically click)
 Prompt.disenchant = CreateFrame("Button", "DEHelperSecureDisenchant", Prompt, "SecureActionButtonTemplate,UIPanelButtonTemplate")
@@ -78,16 +81,9 @@ Prompt.ignore:SetText("Ignore/Never")
 -- State carried while shown
 Prompt.current = { bag = nil, slot = nil, itemID = nil }
 
--- Tooltip for the item
-Prompt.itemBtn:SetScript("OnEnter", function(self)
-  local c = Prompt.current
-  if c.bag and c.slot then
-    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetBagItem(c.bag, c.slot)
-    GameTooltip:Show()
-  end
+Prompt:SetScript("OnHide", function(self)
+  if self.tooltip then self.tooltip:Hide() end
 end)
-Prompt.itemBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
 -- ==== Helpers ====
 local function HasDisenchant()
@@ -149,12 +145,16 @@ local function ShowPrompt(bag, slot, itemID, link)
   if not HasDisenchant() then return end
   if not ItemStillInBag(bag, slot, itemID) then return end
 
-  local itemName = GetItemInfo(link) or link
-  Prompt.text:SetText(itemName or "This item")
-
   local icon, count = GetIconAndCount(bag, slot)
   if Prompt.itemBtn.icon then Prompt.itemBtn.icon:SetTexture(icon or nil) end
   if Prompt.itemBtn.Count then Prompt.itemBtn.Count:SetText(count and count > 1 and count or "") end
+  if Prompt.tooltip then
+    Prompt.tooltip:SetOwner(Prompt, "ANCHOR_NONE")
+    Prompt.tooltip:ClearAllPoints()
+    Prompt.tooltip:SetPoint("LEFT", Prompt.itemBtn, "RIGHT", 12, 0)
+    Prompt.tooltip:SetBagItem(bag, slot)
+    Prompt.tooltip:Show()
+  end
 
   Prompt.current.bag, Prompt.current.slot, Prompt.current.itemID = bag, slot, itemID
 
