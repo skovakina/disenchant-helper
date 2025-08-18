@@ -1,0 +1,7 @@
+## Interface: 110200
+## Title: DE Helper
+## Notes: Simple disenchant helper
+## Author: You
+## Version: 0.1
+## SavedVariables: DE_HelperDB
+DEHelper.lua
