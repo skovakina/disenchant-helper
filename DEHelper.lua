@@ -15,6 +15,8 @@ local f = CreateFrame("Frame")
 f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("BAG_UPDATE_DELAYED")
 f:RegisterEvent("BAG_UPDATE")
+f:RegisterEvent("UNIT_SPELLCAST_START")
+f:RegisterEvent("UNIT_SPELLCAST_STOP")
 
 -- ===== debounce/skip for current item after click =====
 local lastAction = { itemID = nil, untilTime = 0 }
@@ -143,6 +145,23 @@ local function ItemStillInBag(bag, slot, itemID)
   return idNow == itemID
 end
 
+-- Gather all disenchantable items currently in bags
+local function GatherCandidates()
+  local items = {}
+  for bag = 0, 4 do
+    local slots = GetNumSlots(bag)
+    if slots then
+      for slot = 1, slots do
+        local ok, id, link = IsLikelyDisenchantable(bag, slot)
+        if ok then
+          table.insert(items, { bag = bag, slot = slot, id = id, link = link })
+        end
+      end
+    end
+  end
+  return items
+end
+
 -- Show prompt and configure secure button
 local function ShowPrompt(bag, slot, itemID, link)
   if InCombatLockdown() then return end
@@ -175,6 +194,129 @@ local function TryPrompt()
     ShowPrompt(bag, slot, itemID, link)
   else
     Prompt:Hide()
+  end
+end
+
+-- ==== List view ==== 
+local ITEMS_PER_PAGE = 7
+local List = CreateFrame("Frame", "DEHelperList", UIParent, "BackdropTemplate")
+List:SetSize(360, 300)
+List:SetPoint("CENTER")
+List:SetBackdrop({
+  bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+  edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+  tile = true, tileSize = 32, edgeSize = 32,
+  insets = { left = 11, right = 12, top = 12, bottom = 11 },
+})
+List:Hide()
+List.items, List.page = {}, 1
+
+List.rows = {}
+for i = 1, ITEMS_PER_PAGE do
+  local row = CreateFrame("Frame", nil, List)
+  row:SetSize(320, 32)
+  row:SetPoint("TOPLEFT", 20, -20 - (i - 1) * 34)
+  row.icon = row:CreateTexture(nil, "BORDER")
+  row.icon:SetSize(32, 32)
+  row.icon:SetPoint("LEFT")
+  row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  row.name:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
+  row.name:SetWidth(180)
+  row.name:SetJustifyH("LEFT")
+  row.disenchant = CreateFrame("Button", nil, row, "SecureActionButtonTemplate,UIPanelButtonTemplate")
+  row.disenchant:SetSize(90, 22)
+  row.disenchant:SetPoint("RIGHT")
+  row.disenchant:SetText("Disenchant")
+  List.rows[i] = row
+end
+
+List.prev = CreateFrame("Button", nil, List, "UIPanelButtonTemplate")
+List.prev:SetSize(80, 22)
+List.prev:SetPoint("BOTTOMLEFT", 20, 20)
+List.prev:SetText("Prev")
+List.next = CreateFrame("Button", nil, List, "UIPanelButtonTemplate")
+List.next:SetSize(80, 22)
+List.next:SetPoint("BOTTOMRIGHT", -20, 20)
+List.next:SetText("Next")
+
+local function IsCastingDisenchant()
+  local name = UnitCastingInfo and UnitCastingInfo("player")
+  return name == GetSpellInfo("Disenchant")
+end
+
+function List:RefreshButtons()
+  local disable = IsCastingDisenchant()
+  for _, row in ipairs(self.rows) do
+    if disable then row.disenchant:Disable() else row.disenchant:Enable() end
+  end
+end
+
+function List:Update()
+  local start = (self.page - 1) * ITEMS_PER_PAGE + 1
+  for i = 1, ITEMS_PER_PAGE do
+    local item = self.items[start + i - 1]
+    local row = self.rows[i]
+    if item then
+      local icon = GetIconAndCount(item.bag, item.slot)
+      if type(icon) == "table" then icon = icon[1] end -- compatibility just in case
+      row.icon:SetTexture(icon or nil)
+      row.name:SetText(GetItemInfo(item.link) or item.link)
+      local macro = string.format("/cast Disenchant\n/use %d %d", item.bag, item.slot)
+      row.disenchant:SetAttribute("type", "macro")
+      row.disenchant:SetAttribute("macrotext", macro)
+      row.item = item
+      row:Show()
+    else
+      row.item = nil
+      row:Hide()
+    end
+  end
+  self.prev:SetEnabled(self.page > 1)
+  self.next:SetEnabled(self.page * ITEMS_PER_PAGE < #self.items)
+  self:RefreshButtons()
+end
+
+function List:Rescan()
+  self.items = GatherCandidates()
+  local maxPage = math.max(1, math.ceil(#self.items / ITEMS_PER_PAGE))
+  if self.page > maxPage then self.page = maxPage end
+  self:Update()
+end
+
+List.prev:SetScript("OnClick", function()
+  List.page = math.max(1, List.page - 1)
+  List:Update()
+end)
+List.next:SetScript("OnClick", function()
+  local maxPage = math.ceil(#List.items / ITEMS_PER_PAGE)
+  List.page = math.min(maxPage, List.page + 1)
+  List:Update()
+end)
+
+for _, row in ipairs(List.rows) do
+  row.disenchant:SetScript("PostClick", function(self)
+    local item = self:GetParent().item
+    if item and item.id then
+      lastAction.itemID = item.id
+      lastAction.untilTime = GetTime() + 2
+    end
+    if C_Timer and C_Timer.After then
+      C_Timer.After(0.2, function() if List:IsShown() then List:Rescan() end end)
+      C_Timer.After(1.0, function() if List:IsShown() then List:Rescan() end end)
+    else
+      if List:IsShown() then List:Rescan() end
+    end
+  end)
+end
+
+SLASH_DEHELPERLIST1 = "/dehelperlist"
+SlashCmdList.DEHELPERLIST = function()
+  if List:IsShown() then
+    List:Hide()
+  else
+    List.page = 1
+    List:Rescan()
+    List:Show()
   end
 end
 
@@ -219,11 +361,14 @@ SLASH_DEHELPER1 = "/dehelper"
 SlashCmdList.DEHELPER = function() TryPrompt() end
 
 -- Events
-f:SetScript("OnEvent", function(self, event)
+f:SetScript("OnEvent", function(self, event, arg1)
   if event == "PLAYER_LOGIN" then
     print("|cff33ff99DE Helper loaded.|r Hover the icon for tooltip. Type /dehelper to rescan.")
     C_Timer.After(1, TryPrompt)
   elseif event == "BAG_UPDATE_DELAYED" or event == "BAG_UPDATE" then
     TryPrompt()
+    if List:IsShown() then List:Rescan() end
+  elseif (event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_STOP") and arg1 == "player" then
+    if List:IsShown() then List:RefreshButtons() end
   end
 end)
