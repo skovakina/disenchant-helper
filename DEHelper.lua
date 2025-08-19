@@ -1,5 +1,8 @@
 local ADDON = ...
-DE_HelperDB = DE_HelperDB or { ignore = {} }
+DE_HelperDB = DE_HelperDB or {}
+DE_HelperDB.ignore = DE_HelperDB.ignore or {}
+if DE_HelperDB.enabled == nil then DE_HelperDB.enabled = true end
+DE_HelperDB.minQuality = DE_HelperDB.minQuality or (LE_ITEM_QUALITY_UNCOMMON or 2)
 
 -- Container API shims (Classic vs Retail)
 local GetNumSlots = C_Container and C_Container.GetContainerNumSlots or GetContainerNumSlots
@@ -119,9 +122,11 @@ local function IsLikelyDisenchantable(bag, slot)
   local _, _, quality, _, _, class = GetItemInfo(link)
   if not quality or not class then return false end
   local isArmorOrWeapon = (class == ARMOR_NAME or class == WEAPON_NAME)
-  local isGreenOrBetter = quality >= (LE_ITEM_QUALITY_UNCOMMON or 2) and quality <= (LE_ITEM_QUALITY_EPIC or 4)
+  local minQ = DE_HelperDB.minQuality or (LE_ITEM_QUALITY_UNCOMMON or 2)
+  local maxQ = LE_ITEM_QUALITY_EPIC or 4
+  local meetsQuality = quality >= minQ and quality <= maxQ
 
-  return isArmorOrWeapon and isGreenOrBetter, id, link
+  return isArmorOrWeapon and meetsQuality, id, link
 end
 
 local function FindCandidate()
@@ -149,8 +154,13 @@ local function ShowPrompt(bag, slot, itemID, link)
   if not HasDisenchant() then return end
   if not ItemStillInBag(bag, slot, itemID) then return end
 
-  local itemName = GetItemInfo(link) or link
-  Prompt.text:SetText(itemName or "This item")
+  local itemName, _, quality, itemLevel = GetItemInfo(link)
+  local color = quality and select(4, GetItemQualityColor(quality)) or "|cffffffff"
+  local text = itemName or link or "This item"
+  if itemLevel and itemLevel > 0 then
+    text = string.format("%s (iLvl %d)", text, itemLevel)
+  end
+  Prompt.text:SetText(color .. text .. "|r")
 
   local icon, count = GetIconAndCount(bag, slot)
   if Prompt.itemBtn.icon then Prompt.itemBtn.icon:SetTexture(icon or nil) end
@@ -167,6 +177,7 @@ end
 
 -- TryPrompt scans and (re)shows the next candidate
 local function TryPrompt()
+  if not DE_HelperDB.enabled then return end
   if InCombatLockdown() then return end
   if not HasDisenchant() then return end
   if Prompt:IsShown() then return end
@@ -176,6 +187,44 @@ local function TryPrompt()
   else
     Prompt:Hide()
   end
+end
+
+local function UpdateMinimapButton()
+  if DEHelperMinimapBtn and DEHelperMinimapBtn.icon then
+    DEHelperMinimapBtn.icon:SetDesaturated(not DE_HelperDB.enabled)
+  end
+end
+
+local function SetEnabled(val)
+  DE_HelperDB.enabled = not not val
+  if DE_HelperDB.enabled then
+    print("|cff33ff99DE Helper enabled.|r")
+    TryPrompt()
+  else
+    print("|cff33ff99DE Helper disabled.|r")
+    Prompt:Hide()
+  end
+  UpdateMinimapButton()
+end
+
+local function CreateMinimapButton()
+  if DEHelperMinimapBtn then return end
+  local btn = CreateFrame("Button", "DEHelperMinimapBtn", Minimap)
+  btn:SetSize(32, 32)
+  btn:SetPoint("TOPLEFT")
+  btn.icon = btn:CreateTexture(nil, "BACKGROUND")
+  btn.icon:SetAllPoints()
+  btn.icon:SetTexture("Interface\\ICONS\\INV_Enchant_EssenceMagicLarge")
+  btn:SetScript("OnClick", function() SetEnabled(not DE_HelperDB.enabled) end)
+  btn:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    GameTooltip:AddLine("DE Helper")
+    GameTooltip:AddLine(DE_HelperDB.enabled and "Click to disable" or "Click to enable")
+    GameTooltip:Show()
+  end)
+  btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  DEHelperMinimapBtn = btn
+  UpdateMinimapButton()
 end
 
 -- ===== click handlers that rescan =====
@@ -214,15 +263,35 @@ Prompt.ignore:SetScript("OnClick", function()
   TryPrompt()
 end)
 
--- Slash to rescan manually
+-- Slash command for toggling and rescanning
 SLASH_DEHELPER1 = "/dehelper"
-SlashCmdList.DEHELPER = function() TryPrompt() end
+SlashCmdList.DEHELPER = function(msg)
+  msg = msg and msg:lower() or ""
+  if msg == "on" or msg == "enable" then
+    SetEnabled(true)
+  elseif msg == "off" or msg == "disable" then
+    SetEnabled(false)
+  elseif msg == "toggle" then
+    SetEnabled(not DE_HelperDB.enabled)
+  elseif msg:match("^quality%s+%d") then
+    local q = tonumber(msg:match("^quality%s+(%d)"))
+    if q then
+      DE_HelperDB.minQuality = q
+      print("|cff33ff99DE Helper:|r min quality set to", q)
+    end
+  else
+    TryPrompt()
+  end
+end
 
 -- Events
 f:SetScript("OnEvent", function(self, event)
   if event == "PLAYER_LOGIN" then
     print("|cff33ff99DE Helper loaded.|r Hover the icon for tooltip. Type /dehelper to rescan.")
-    C_Timer.After(1, TryPrompt)
+    CreateMinimapButton()
+    if DE_HelperDB.enabled then
+      C_Timer.After(1, TryPrompt)
+    end
   elseif event == "BAG_UPDATE_DELAYED" or event == "BAG_UPDATE" then
     TryPrompt()
   end
