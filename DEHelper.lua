@@ -62,8 +62,10 @@ Prompt.tooltip:SetPoint("TOPLEFT", Prompt.itemBtn, "TOPRIGHT", 12, 0)
 Prompt.tooltip:SetFrameStrata(Prompt:GetFrameStrata())
 Prompt.tooltip:SetFrameLevel(Prompt:GetFrameLevel() + 1)
 Prompt.tooltip:EnableMouse(false)
-Prompt.tooltip:DisableDrawLayer("BACKGROUND")
-Prompt.tooltip:DisableDrawLayer("BORDER")
+if Prompt.tooltip.DisableDrawLayer then
+  Prompt.tooltip:DisableDrawLayer("BACKGROUND")
+  Prompt.tooltip:DisableDrawLayer("BORDER")
+end
 
 -- Secure action button for Disenchant (player must physically click)
 Prompt.disenchant = CreateFrame("Button", "DEHelperSecureDisenchant", Prompt, "SecureActionButtonTemplate,UIPanelButtonTemplate")
@@ -193,6 +195,7 @@ local function ShowPrompt(bag, slot, itemID, link)
   if Prompt.tooltip then
     Prompt.tooltip:SetOwner(Prompt, "ANCHOR_NONE")
     Prompt.tooltip:ClearAllPoints()
+    Prompt.tooltip:SetParent(Prompt)
     Prompt.tooltip:SetPoint("TOPLEFT", Prompt.itemBtn, "TOPRIGHT", 12, -2)
     Prompt.tooltip:SetBagItem(bag, slot)
     Prompt.tooltip:Show()
