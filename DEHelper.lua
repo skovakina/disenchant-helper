@@ -22,73 +22,6 @@ local function ShouldSkip(itemID)
   return itemID and itemID == lastAction.itemID and GetTime() < (lastAction.untilTime or 0)
 end
 
--- ==== UI: secure prompt ====
-local Prompt = CreateFrame("Frame", "DEHelperPrompt", UIParent, "BackdropTemplate")
-Prompt:SetSize(360, 140)
-Prompt:SetPoint("CENTER")
-Prompt:SetBackdrop({
-  bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-  edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-  tile = true, tileSize = 32, edgeSize = 32,
-  insets = { left = 11, right = 12, top = 12, bottom = 11 },
-})
-Prompt:Hide()
-Prompt:EnableMouse(true)
-Prompt:SetMovable(true)
-Prompt:RegisterForDrag("LeftButton")
-Prompt:SetScript("OnDragStart", Prompt.StartMoving)
-Prompt:SetScript("OnDragStop", Prompt.StopMovingOrSizing)
-
-Prompt.title = Prompt:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-Prompt.title:SetPoint("TOP", 0, -16)
-Prompt.title:SetText("Disenchant this item?")
-
--- Item icon + tooltip
-Prompt.itemBtn = CreateFrame("Button", "DEHelperItemBtn", Prompt, "ItemButtonTemplate")
-Prompt.itemBtn:SetSize(36, 36)
-Prompt.itemBtn:SetPoint("TOPLEFT", 20, -40)
-Prompt.itemBtn.icon = _G["DEHelperItemBtnIconTexture"] or Prompt.itemBtn:CreateTexture(nil, "BORDER")
-if not _G["DEHelperItemBtnIconTexture"] then Prompt.itemBtn.icon:SetAllPoints() end
-Prompt.itemBtn.Count = _G["DEHelperItemBtnCount"]
-
-Prompt.text = Prompt:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-Prompt.text:SetPoint("LEFT", Prompt.itemBtn, "RIGHT", 12, 0)
-Prompt.text:SetWidth(240)
-Prompt.text:SetJustifyH("LEFT")
-Prompt.text:SetText("")
-
--- Secure action button for Disenchant (player must physically click)
-Prompt.disenchant = CreateFrame("Button", "DEHelperSecureDisenchant", Prompt, "SecureActionButtonTemplate,UIPanelButtonTemplate")
-Prompt.disenchant:SetSize(110, 22)
-Prompt.disenchant:SetPoint("BOTTOMLEFT", 20, 20)
-Prompt.disenchant:SetText("Disenchant")
-Prompt.disenchant:SetAttribute("type", "macro")
-
--- Regular buttons
-Prompt.later = CreateFrame("Button", nil, Prompt, "UIPanelButtonTemplate")
-Prompt.later:SetSize(80, 22)
-Prompt.later:SetPoint("BOTTOM", 0, 20)
-Prompt.later:SetText("Later")
-
-Prompt.ignore = CreateFrame("Button", nil, Prompt, "UIPanelButtonTemplate")
-Prompt.ignore:SetSize(110, 22)
-Prompt.ignore:SetPoint("BOTTOMRIGHT", -20, 20)
-Prompt.ignore:SetText("Ignore/Never")
-
--- State carried while shown
-Prompt.current = { bag = nil, slot = nil, itemID = nil }
-
--- Tooltip for the item
-Prompt.itemBtn:SetScript("OnEnter", function(self)
-  local c = Prompt.current
-  if c.bag and c.slot then
-    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetBagItem(c.bag, c.slot)
-    GameTooltip:Show()
-  end
-end)
-Prompt.itemBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
 -- ==== Helpers ====
 local function HasDisenchant()
   local name = GetSpellInfo and GetSpellInfo("Disenchant")
@@ -100,7 +33,7 @@ local function GetIconAndCount(bag, slot)
   if type(info) == "table" then
     return info.iconFileID, info.stackCount
   else
-    local texture, count = GetContItemInfo(bag, slot) -- old API return list
+    local texture, count = GetContItemInfo(bag, slot)
     return texture, count
   end
 end
@@ -124,106 +57,176 @@ local function IsLikelyDisenchantable(bag, slot)
   return isArmorOrWeapon and isGreenOrBetter, id, link
 end
 
-local function FindCandidate()
+local function GatherCandidates()
+  local items = {}
   for bag = 0, 4 do
     local slots = GetNumSlots(bag)
     if slots then
       for slot = 1, slots do
         local ok, id, link = IsLikelyDisenchantable(bag, slot)
         if ok then
-          return bag, slot, id, link
+          table.insert(items, { bag = bag, slot = slot, itemID = id, link = link })
         end
       end
     end
   end
+  return items
 end
 
-local function ItemStillInBag(bag, slot, itemID)
-  local idNow = ItemIDFromBagSlot(bag, slot)
-  return idNow == itemID
+-- ==== UI: list of items ====
+local DEHelper_ShowList -- forward declaration
+
+local ListFrame = CreateFrame("Frame", "DEHelperList", UIParent, "BackdropTemplate")
+ListFrame:SetSize(400, 360)
+ListFrame:SetPoint("CENTER")
+ListFrame:SetBackdrop({
+  bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+  edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+  tile = true, tileSize = 32, edgeSize = 32,
+  insets = { left = 11, right = 12, top = 12, bottom = 11 },
+})
+ListFrame:Hide()
+ListFrame:EnableMouse(true)
+ListFrame:SetMovable(true)
+ListFrame:RegisterForDrag("LeftButton")
+ListFrame:SetScript("OnDragStart", ListFrame.StartMoving)
+ListFrame:SetScript("OnDragStop", ListFrame.StopMovingOrSizing)
+
+ListFrame.title = ListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+ListFrame.title:SetPoint("TOP", 0, -16)
+ListFrame.title:SetText("Disenchantable Items")
+
+ListFrame.close = CreateFrame("Button", nil, ListFrame, "UIPanelCloseButton")
+ListFrame.close:SetPoint("TOPRIGHT", -5, -5)
+ListFrame.close:SetScript("OnClick", function()
+  ListFrame:Hide()
+end)
+
+ListFrame.rows = {}
+for i = 1, 7 do
+  local row = CreateFrame("Frame", nil, ListFrame)
+  row:SetSize(360, 36)
+  row:SetPoint("TOPLEFT", 20, -40 - (i - 1) * 40)
+
+  row.itemBtn = CreateFrame("Button", nil, row, "ItemButtonTemplate")
+  row.itemBtn:SetSize(36, 36)
+  row.itemBtn:SetPoint("LEFT", 0, 0)
+  row.itemBtn.icon = _G[row.itemBtn:GetName() .. "IconTexture"] or row.itemBtn:CreateTexture(nil, "BORDER")
+  if not _G[row.itemBtn:GetName() .. "IconTexture"] then row.itemBtn.icon:SetAllPoints() end
+  row.itemBtn.Count = _G[row.itemBtn:GetName() .. "Count"]
+
+  row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  row.text:SetPoint("LEFT", row.itemBtn, "RIGHT", 12, 0)
+  row.text:SetWidth(200)
+  row.text:SetJustifyH("LEFT")
+
+  row.disenchant = CreateFrame("Button", nil, row, "SecureActionButtonTemplate,UIPanelButtonTemplate")
+  row.disenchant:SetSize(80, 22)
+  row.disenchant:SetPoint("LEFT", row.text, "RIGHT", 8, 0)
+  row.disenchant:SetText("Disenchant")
+  row.disenchant:SetAttribute("type", "macro")
+
+  row.current = { bag = nil, slot = nil, itemID = nil }
+
+  row.itemBtn:SetScript("OnEnter", function(self)
+    local c = row.current
+    if c.bag and c.slot then
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      GameTooltip:SetBagItem(c.bag, c.slot)
+      GameTooltip:Show()
+    end
+  end)
+  row.itemBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+  row.disenchant:SetScript("PostClick", function()
+    local id = row.current.itemID
+    if id then
+      lastAction.itemID = id
+      lastAction.untilTime = GetTime() + 2
+    end
+    if C_Timer and C_Timer.After then
+      C_Timer.After(0.2, function() DEHelper_ShowList(ListFrame.page) end)
+    else
+      DEHelper_ShowList(ListFrame.page)
+    end
+  end)
+
+  ListFrame.rows[i] = row
 end
 
--- Show prompt and configure secure button
-local function ShowPrompt(bag, slot, itemID, link)
+ListFrame.prev = CreateFrame("Button", nil, ListFrame, "UIPanelButtonTemplate")
+ListFrame.prev:SetSize(80, 22)
+ListFrame.prev:SetPoint("BOTTOMLEFT", 20, 20)
+ListFrame.prev:SetText("Prev")
+
+ListFrame.next = CreateFrame("Button", nil, ListFrame, "UIPanelButtonTemplate")
+ListFrame.next:SetSize(80, 22)
+ListFrame.next:SetPoint("BOTTOMRIGHT", -20, 20)
+ListFrame.next:SetText("Next")
+
+ListFrame.pageText = ListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+ListFrame.pageText:SetPoint("BOTTOM", 0, 24)
+
+ListFrame.page = 1
+ListFrame.items = {}
+
+local function UpdatePagination()
+  local totalPages = math.ceil(#ListFrame.items / 7)
+  if totalPages == 0 then totalPages = 1 end
+  ListFrame.page = math.max(1, math.min(ListFrame.page, totalPages))
+  ListFrame.prev:SetEnabled(ListFrame.page > 1)
+  ListFrame.next:SetEnabled(ListFrame.page < totalPages)
+  ListFrame.pageText:SetText(string.format("Page %d/%d", ListFrame.page, totalPages))
+end
+
+function DEHelper_ShowList(page)
   if InCombatLockdown() then return end
   if not HasDisenchant() then return end
-  if not ItemStillInBag(bag, slot, itemID) then return end
-
-  local itemName = GetItemInfo(link) or link
-  Prompt.text:SetText(itemName or "This item")
-
-  local icon, count = GetIconAndCount(bag, slot)
-  if Prompt.itemBtn.icon then Prompt.itemBtn.icon:SetTexture(icon or nil) end
-  if Prompt.itemBtn.Count then Prompt.itemBtn.Count:SetText(count and count > 1 and count or "") end
-
-  Prompt.current.bag, Prompt.current.slot, Prompt.current.itemID = bag, slot, itemID
-
-  local macro = string.format("/cast Disenchant\n/use %d %d", bag, slot)
-  Prompt.disenchant:SetAttribute("type", "macro")
-  Prompt.disenchant:SetAttribute("macrotext", macro)
-
-  Prompt:Show()
+  ListFrame.items = GatherCandidates()
+  ListFrame.page = page or 1
+  UpdatePagination()
+  local start = (ListFrame.page - 1) * 7 + 1
+  for i = 1, 7 do
+    local item = ListFrame.items[start + i - 1]
+    local row = ListFrame.rows[i]
+    if item then
+      row:Show()
+      row.current = item
+      local icon, count = GetIconAndCount(item.bag, item.slot)
+      if row.itemBtn.icon then row.itemBtn.icon:SetTexture(icon or nil) end
+      if row.itemBtn.Count then row.itemBtn.Count:SetText(count and count > 1 and count or "") end
+      local name = GetItemInfo(item.link) or item.link
+      row.text:SetText(name or "")
+      row.disenchant:SetAttribute("macrotext", string.format("/cast Disenchant\n/use %d %d", item.bag, item.slot))
+    else
+      row:Hide()
+    end
+  end
+  ListFrame:Show()
 end
 
--- TryPrompt scans and (re)shows the next candidate
-local function TryPrompt()
-  if InCombatLockdown() then return end
-  if not HasDisenchant() then return end
-  if Prompt:IsShown() then return end
-  local bag, slot, itemID, link = FindCandidate()
-  if bag then
-    ShowPrompt(bag, slot, itemID, link)
-  else
-    Prompt:Hide()
-  end
-end
-
--- ===== click handlers that rescan =====
-
--- After Disenchant: hide, mark skip for this item briefly, then rescan soon
-Prompt.disenchant:SetScript("PostClick", function()
-  local id = Prompt.current.itemID
-  if id then
-    lastAction.itemID = id
-    lastAction.untilTime = GetTime() + 2 -- 2s window to avoid immediate re-prompt
-  end
-  Prompt:Hide()
-  -- rescan quickly (bags may update slightly later)
-  if C_Timer and C_Timer.After then
-    C_Timer.After(0.2, TryPrompt)
-    C_Timer.After(1.0, TryPrompt)
-  else
-    TryPrompt()
+ListFrame.prev:SetScript("OnClick", function()
+  if ListFrame.page > 1 then
+    ListFrame.page = ListFrame.page - 1
+    DEHelper_ShowList(ListFrame.page)
   end
 end)
 
--- Later: hide and rescan immediately
-Prompt.later:SetScript("OnClick", function()
-  Prompt:Hide()
-  TryPrompt()
+ListFrame.next:SetScript("OnClick", function()
+  ListFrame.page = ListFrame.page + 1
+  DEHelper_ShowList(ListFrame.page)
 end)
 
--- Ignore/Never: add to ignore, hide and rescan
-Prompt.ignore:SetScript("OnClick", function()
-  local id = Prompt.current.itemID
-  if id then
-    DE_HelperDB.ignore[id] = true
-    print("|cff33ff99DE Helper:|r ignoring itemID", id)
-  end
-  Prompt:Hide()
-  TryPrompt()
-end)
-
--- Slash to rescan manually
+-- Slash command to show list
 SLASH_DEHELPER1 = "/dehelper"
-SlashCmdList.DEHELPER = function() TryPrompt() end
+SlashCmdList.DEHELPER = function() DEHelper_ShowList(1) end
 
 -- Events
 f:SetScript("OnEvent", function(self, event)
   if event == "PLAYER_LOGIN" then
-    print("|cff33ff99DE Helper loaded.|r Hover the icon for tooltip. Type /dehelper to rescan.")
-    C_Timer.After(1, TryPrompt)
-  elseif event == "BAG_UPDATE_DELAYED" or event == "BAG_UPDATE" then
-    TryPrompt()
+    print("|cff33ff99DE Helper loaded.|r Type /dehelper to list items.")
+  elseif (event == "BAG_UPDATE_DELAYED" or event == "BAG_UPDATE") and ListFrame:IsShown() then
+    DEHelper_ShowList(ListFrame.page)
   end
 end)
+
