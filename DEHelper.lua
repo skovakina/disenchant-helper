@@ -22,9 +22,9 @@ local function ShouldSkip(itemID)
   return itemID and itemID == lastAction.itemID and GetTime() < (lastAction.untilTime or 0)
 end
 
--- ==== UI: secure prompt ====
+local MIN_WIDTH, MIN_HEIGHT = 360, 140
 local Prompt = CreateFrame("Frame", "DEHelperPrompt", UIParent, "BackdropTemplate")
-Prompt:SetSize(360, 140)
+Prompt:SetSize(MIN_WIDTH, MIN_HEIGHT)
 Prompt:SetPoint("CENTER")
 Prompt:SetBackdrop({
   bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -55,7 +55,17 @@ Prompt.text = Prompt:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 Prompt.text:SetPoint("LEFT", Prompt.itemBtn, "RIGHT", 12, 0)
 Prompt.text:SetWidth(240)
 Prompt.text:SetJustifyH("LEFT")
-Prompt.text:SetText("")
+Prompt.text:Hide()
+
+Prompt.tooltip = CreateFrame("GameTooltip", "DEHelperPromptTooltip", Prompt, "GameTooltipTemplate")
+Prompt.tooltip:SetPoint("TOPLEFT", Prompt.itemBtn, "TOPRIGHT", 12, 0)
+Prompt.tooltip:SetFrameStrata(Prompt:GetFrameStrata())
+Prompt.tooltip:SetFrameLevel(Prompt:GetFrameLevel() + 1)
+Prompt.tooltip:EnableMouse(false)
+if Prompt.tooltip.DisableDrawLayer then
+  Prompt.tooltip:DisableDrawLayer("BACKGROUND")
+  Prompt.tooltip:DisableDrawLayer("BORDER")
+end
 
 -- Secure action button for Disenchant (player must physically click)
 Prompt.disenchant = CreateFrame("Button", "DEHelperSecureDisenchant", Prompt, "SecureActionButtonTemplate,UIPanelButtonTemplate")
@@ -78,16 +88,46 @@ Prompt.ignore:SetText("Ignore/Never")
 -- State carried while shown
 Prompt.current = { bag = nil, slot = nil, itemID = nil }
 
--- Tooltip for the item
-Prompt.itemBtn:SetScript("OnEnter", function(self)
-  local c = Prompt.current
-  if c.bag and c.slot then
-    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetBagItem(c.bag, c.slot)
-    GameTooltip:Show()
-  end
+Prompt:SetScript("OnHide", function(self)
+  if self.tooltip then self.tooltip:Hide() end
 end)
-Prompt.itemBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+local function ResizePrompt()
+  local w, h = MIN_WIDTH, MIN_HEIGHT
+  if Prompt.tooltip and Prompt.tooltip:IsShown() then
+    local tw, th = Prompt.tooltip:GetSize()
+    w = math.max(w, 60 + tw)
+    h = math.max(h, 80 + math.max(th, Prompt.itemBtn:GetHeight()))
+  end
+  Prompt:SetSize(w, h)
+end
+
+local function AnchorPrompt()
+  local anchor
+  local disenchantName = GetSpellInfo and GetSpellInfo("Disenchant")
+  if disenchantName then
+    local bars = { "ActionButton", "MultiBarBottomLeftButton", "MultiBarBottomRightButton", "MultiBarRightButton", "MultiBarLeftButton" }
+    for _, prefix in ipairs(bars) do
+      for i = 1, 12 do
+        local btn = _G[prefix .. i]
+        if btn and HasAction and HasAction(btn.action) then
+          local type, id = GetActionInfo(btn.action)
+          if type == "spell" and GetSpellInfo(id) == disenchantName then
+            anchor = btn
+            break
+          end
+        end
+      end
+      if anchor then break end
+    end
+  end
+  Prompt:ClearAllPoints()
+  if anchor then
+    Prompt:SetPoint("TOPLEFT", anchor, "BOTTOMRIGHT", 0, -4)
+  else
+    Prompt:SetPoint("CENTER")
+  end
+end
 
 -- ==== Helpers ====
 local function HasDisenchant()
@@ -149,12 +189,22 @@ local function ShowPrompt(bag, slot, itemID, link)
   if not HasDisenchant() then return end
   if not ItemStillInBag(bag, slot, itemID) then return end
 
-  local itemName = GetItemInfo(link) or link
-  Prompt.text:SetText(itemName or "This item")
-
   local icon, count = GetIconAndCount(bag, slot)
   if Prompt.itemBtn.icon then Prompt.itemBtn.icon:SetTexture(icon or nil) end
   if Prompt.itemBtn.Count then Prompt.itemBtn.Count:SetText(count and count > 1 and count or "") end
+  if Prompt.tooltip then
+    -- Populate tooltip first, then override the anchor after it is shown to
+    -- keep it from snapping to the screen's bottom left.
+    Prompt.tooltip:SetOwner(Prompt, "ANCHOR_NONE")
+    Prompt.tooltip:SetBagItem(bag, slot)
+    Prompt.tooltip:Show()
+    Prompt.tooltip:ClearAllPoints()
+    Prompt.tooltip:SetParent(Prompt)
+    Prompt.tooltip:SetPoint("TOPLEFT", Prompt.itemBtn, "TOPRIGHT", 12, -2)
+  end
+
+  ResizePrompt()
+  AnchorPrompt()
 
   Prompt.current.bag, Prompt.current.slot, Prompt.current.itemID = bag, slot, itemID
 
