@@ -96,6 +96,12 @@ ListFrame.title = ListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarg
 ListFrame.title:SetPoint("TOP", 0, -16)
 ListFrame.title:SetText("Disenchantable Items")
 
+ListFrame.close = CreateFrame("Button", nil, ListFrame, "UIPanelCloseButton")
+ListFrame.close:SetPoint("TOPRIGHT", -5, -5)
+ListFrame.close:SetScript("OnClick", function()
+  ListFrame:Hide()
+end)
+
 ListFrame.rows = {}
 for i = 1, 7 do
   local row = CreateFrame("Frame", nil, ListFrame)
