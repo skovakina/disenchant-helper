@@ -22,9 +22,9 @@ local function ShouldSkip(itemID)
   return itemID and itemID == lastAction.itemID and GetTime() < (lastAction.untilTime or 0)
 end
 
--- ==== UI: secure prompt ====
+local MIN_WIDTH, MIN_HEIGHT = 360, 140
 local Prompt = CreateFrame("Frame", "DEHelperPrompt", UIParent, "BackdropTemplate")
-Prompt:SetSize(360, 140)
+Prompt:SetSize(MIN_WIDTH, MIN_HEIGHT)
 Prompt:SetPoint("CENTER")
 Prompt:SetBackdrop({
   bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -89,6 +89,43 @@ Prompt.current = { bag = nil, slot = nil, itemID = nil }
 Prompt:SetScript("OnHide", function(self)
   if self.tooltip then self.tooltip:Hide() end
 end)
+
+local function ResizePrompt()
+  local w, h = MIN_WIDTH, MIN_HEIGHT
+  if Prompt.tooltip and Prompt.tooltip:IsShown() then
+    local tw, th = Prompt.tooltip:GetSize()
+    w = math.max(w, 60 + tw)
+    h = math.max(h, 80 + math.max(th, Prompt.itemBtn:GetHeight()))
+  end
+  Prompt:SetSize(w, h)
+end
+
+local function AnchorPrompt()
+  local anchor
+  local disenchantName = GetSpellInfo and GetSpellInfo("Disenchant")
+  if disenchantName then
+    local bars = { "ActionButton", "MultiBarBottomLeftButton", "MultiBarBottomRightButton", "MultiBarRightButton", "MultiBarLeftButton" }
+    for _, prefix in ipairs(bars) do
+      for i = 1, 12 do
+        local btn = _G[prefix .. i]
+        if btn and HasAction and HasAction(btn.action) then
+          local type, id = GetActionInfo(btn.action)
+          if type == "spell" and GetSpellInfo(id) == disenchantName then
+            anchor = btn
+            break
+          end
+        end
+      end
+      if anchor then break end
+    end
+  end
+  Prompt:ClearAllPoints()
+  if anchor then
+    Prompt:SetPoint("TOPLEFT", anchor, "BOTTOMRIGHT", 0, -4)
+  else
+    Prompt:SetPoint("CENTER")
+  end
+end
 
 -- ==== Helpers ====
 local function HasDisenchant()
@@ -158,9 +195,11 @@ local function ShowPrompt(bag, slot, itemID, link)
     Prompt.tooltip:ClearAllPoints()
     Prompt.tooltip:SetPoint("TOPLEFT", Prompt.itemBtn, "TOPRIGHT", 12, -2)
     Prompt.tooltip:SetBagItem(bag, slot)
-    if Prompt.tooltip:GetWidth() > 260 then Prompt.tooltip:SetWidth(260) end
     Prompt.tooltip:Show()
   end
+
+  ResizePrompt()
+  AnchorPrompt()
 
   Prompt.current.bag, Prompt.current.slot, Prompt.current.itemID = bag, slot, itemID
 
