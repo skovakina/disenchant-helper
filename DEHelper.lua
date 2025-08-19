@@ -193,12 +193,14 @@ local function ShowPrompt(bag, slot, itemID, link)
   if Prompt.itemBtn.icon then Prompt.itemBtn.icon:SetTexture(icon or nil) end
   if Prompt.itemBtn.Count then Prompt.itemBtn.Count:SetText(count and count > 1 and count or "") end
   if Prompt.tooltip then
+    -- Populate tooltip first, then override the anchor after it is shown to
+    -- keep it from snapping to the screen's bottom left.
     Prompt.tooltip:SetOwner(Prompt, "ANCHOR_NONE")
+    Prompt.tooltip:SetBagItem(bag, slot)
+    Prompt.tooltip:Show()
     Prompt.tooltip:ClearAllPoints()
     Prompt.tooltip:SetParent(Prompt)
     Prompt.tooltip:SetPoint("TOPLEFT", Prompt.itemBtn, "TOPRIGHT", 12, -2)
-    Prompt.tooltip:SetBagItem(bag, slot)
-    Prompt.tooltip:Show()
   end
 
   ResizePrompt()
